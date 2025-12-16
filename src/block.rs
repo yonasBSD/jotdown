@@ -284,6 +284,30 @@ impl<'s> TreeParser<'s> {
         {
             let lines = &mut lines[..line_count];
             let span_start = (span_start.start + lines[0].start)..(span_start.end + lines[0].start);
+
+            // ignore trailing blanklines after tables if any
+            let (lines, line_count) = if matches!(
+                kind,
+                Kind::Table {
+                    caption: false,
+                    blankline: true,
+                }
+            ) {
+                let lc = line_count
+                    - lines
+                        .iter()
+                        .rev()
+                        .take_while(|l| {
+                            self.src[(*l).clone()]
+                                .trim_matches(|c: char| c.is_ascii_whitespace())
+                                .is_empty()
+                        })
+                        .count();
+                (&mut lines[..lc], lc)
+            } else {
+                (lines, line_count)
+            };
+
             let end_line = lines[lines.len() - 1].clone();
             let span_end = match kind {
                 Kind::Fenced {
@@ -924,6 +948,7 @@ enum Kind<'s> {
     },
     Table {
         caption: bool,
+        blankline: bool,
     },
 }
 
@@ -974,7 +999,13 @@ impl<'s> IdentifiedBlock<'s> {
             }
             '|' => {
                 if lt >= 2 && line_t.ends_with('|') && !line_t.ends_with("\\|") {
-                    Some((Kind::Table { caption: false }, indent..indent))
+                    Some((
+                        Kind::Table {
+                            caption: false,
+                            blankline: false,
+                        },
+                        indent..indent,
+                    ))
                 } else {
                     None
                 }
@@ -1196,7 +1227,7 @@ impl<'s> Kind<'s> {
                 matches!(next, Self::Paragraph)
                     || matches!(next, Self::Heading { level: l } if l == *level )
             }
-            Self::Paragraph | Self::Table { caption: true } => !line
+            Self::Paragraph | Self::Table { caption: true, .. } => !line
                 .trim_matches(|c: char| c.is_ascii_whitespace())
                 .is_empty(),
             Self::ListItem {
@@ -1258,20 +1289,20 @@ impl<'s> Kind<'s> {
                 }
                 true
             }
-            Self::Table { caption } => {
+            Self::Table { caption, blankline } => {
                 let line_t = line.trim_matches(|c: char| c.is_ascii_whitespace());
-                line_t.is_empty()
-                    || (line_t.starts_with('|')
-                        && line_t.ends_with('|')
-                        && !line_t.ends_with("\\|"))
-                    || {
-                        if line_t.starts_with("^ ") {
-                            *caption = true;
-                            true
-                        } else {
-                            false
-                        }
-                    }
+                if line_t.is_empty() {
+                    *blankline = true;
+                    true
+                } else if line_t.starts_with("^ ") {
+                    *caption = true;
+                    true
+                } else {
+                    !*blankline
+                        && (line_t.starts_with('|')
+                            && line_t.ends_with('|')
+                            && !line_t.ends_with("\\|"))
+                }
             }
         }
     }
